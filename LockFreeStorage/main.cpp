@@ -1,4 +1,5 @@
 #include <iostream>
+#include <optional>
 #include <atomic>
 #include <thread>
 #include <mutex>
@@ -118,10 +119,11 @@ public:
 
 	}
 
-	TYPE pop() {
+	std::optional<TYPE> pop() {
 		//_ASSERT(top_ != nullptr);
 
 		auto top = top_.load();
+		if (top == nullptr) { return std::nullopt; }
 
 		TYPE data;
 		while (1) {
@@ -172,7 +174,12 @@ int main() {
 		t = std::thread([&]() {
 			for (int i = 0; i < ADD_COUNT; i++) {
 				while (s.empty()) {}
-				auto d = s.pop();
+				std::optional<int> od = std::nullopt;
+				while (od == std::nullopt) {
+					od = s.pop();
+				}
+
+				auto d = od.value();
 				mutex.lock();
 				_ASSERT(v[d] == d);
 				v[d] = 0;
@@ -192,7 +199,7 @@ int main() {
 
 	int i = 0;
 	while (!s.empty()) {
-		auto d = s.pop();
+		auto d = s.pop().value();
 		_ASSERT(v[d] == d);
 		v[d] = 0;
 		i++;
