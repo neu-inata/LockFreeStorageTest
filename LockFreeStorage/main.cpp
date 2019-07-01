@@ -123,10 +123,10 @@ public:
 		//_ASSERT(top_ != nullptr);
 
 		auto top = top_.load();
-		if (top == nullptr) { return std::nullopt; }
 
 		TYPE data;
 		while (1) {
+			if (top == nullptr) { return std::nullopt; }
 			data = top->value;
 			if (top_.compare_exchange_strong(top, top->next, std::memory_order_relaxed)) {
 				deallocNode(top);
