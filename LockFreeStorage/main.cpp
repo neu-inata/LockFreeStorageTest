@@ -173,10 +173,11 @@ int main() {
 	for (auto& t : popThread) {
 		t = std::thread([&]() {
 			for (int i = 0; i < ADD_COUNT; i++) {
-				while (s.empty()) {}
+				while (s.empty()) { _mm_pause(); }
 				std::optional<int> od = std::nullopt;
 				while (od == std::nullopt) {
 					od = s.pop();
+					_mm_pause();
 				}
 
 				auto d = od.value();
