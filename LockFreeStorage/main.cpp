@@ -17,30 +17,101 @@ double GetTimeFromStartEnd(const LARGE_INTEGER& start, const LARGE_INTEGER& end)
 template<typename TYPE, uint64_t STORAGE_COUNT>
 class LFStack {
 
+	static_assert(STORAGE_COUNT != 0, "");
+
 private:
 	struct Node {
 		TYPE value;
 		Node* next;
 	};
 
+	union TagIndex {
+		struct {
+			uint32_t tag;
+			uint32_t index;
+		} ti;
+		uint64_t u;
+
+		static const uint64_t Inviled = UINT64_MAX;
+	};
+
 	Node* pool_;
+	std::atomic<uint64_t> poolTop_;
 	std::atomic<Node*> top_;
+
+	std::atomic<uint32_t> poolTag_;
+	std::atomic<uint32_t> topTag_;
+	std::atomic<uint32_t> count_;
+
+	Node* allocNode() {
+		_ASSERT(poolTop_.load() != TagIndex::Inviled);
+		TagIndex poolTop;
+		poolTop.u = poolTop_.load();
+		while (1) {
+			uint64_t next = reinterpret_cast<TagIndex*>(pool_ + poolTop.ti.index)->u;
+			if (poolTop_.compare_exchange_strong(poolTop.u, next)) {
+				break;
+			}
+		}
+
+		return pool_ + poolTop.ti.index;
+	}
+
+	void deallocNode(Node* node) {
+		TagIndex next;
+		next.ti.tag = poolTag_.fetch_add(1);
+		next.ti.index = node - pool_;
+
+		TagIndex poolTop;
+		poolTop.u = poolTop_.load();
+		while (1) {
+
+			reinterpret_cast<TagIndex*>(node)->u = poolTop.u;
+			if (poolTop_.compare_exchange_strong(poolTop.u, next.u)) {
+				break;
+			}
+		}
+	}
 
 public:
 	LFStack() {
 		top_ = nullptr;
+		pool_ = reinterpret_cast<Node*>(_aligned_malloc(sizeof(Node) * STORAGE_COUNT, alignof(Node)));
+		poolTag_ = topTag_ = 0;
+
+		// poolÇÃèâä˙âª
+		TagIndex* node = reinterpret_cast<TagIndex*>(pool_);
+		for (int i = 0; i < STORAGE_COUNT; i++) {
+			node = reinterpret_cast<TagIndex*>(pool_ + i);
+			node->ti.tag = poolTag_.fetch_add(1);
+			node->ti.index = i + 1;
+		}
+		node->u = TagIndex::Inviled;
+
+		TagIndex poolTop;
+		poolTop.ti.tag = poolTag_.fetch_add(1);
+		poolTop.ti.index = 0;
+		poolTop_ = poolTop.u;
+
+		//TagIndex top;
+		//top.ti.tag = topTag_.fetch_add(1);
+		//top.ti.index = 0;
+		//top_ = top.u;
+
 	}
 
 	~LFStack() {
+		_aligned_free(pool_);
 	}
 
 	void push(TYPE data) {
 		auto top = top_.load();
-		Node* node = new Node;
+		Node* node = allocNode();
 		node->value = data;
+		node->next  = top;
 		while (1) {
-			node->next = top;
-			if (top_.compare_exchange_strong(top, node, std::memory_order_relaxed)) {
+			if (top_.compare_exchange_strong(node->next, node, std::memory_order_relaxed)) {
+				count_++;
 				break;
 			}
 		}
@@ -48,7 +119,7 @@ public:
 	}
 
 	TYPE pop() {
-		_ASSERT(top_ != nullptr);
+		//_ASSERT(top_ != nullptr);
 
 		auto top = top_.load();
 
@@ -56,7 +127,8 @@ public:
 		while (1) {
 			data = top->value;
 			if (top_.compare_exchange_strong(top, top->next, std::memory_order_relaxed)) {
-				delete top;
+				deallocNode(top);
+				count_--;
 				break;
 			}
 		}
@@ -65,7 +137,7 @@ public:
 	}
 
 	bool empty() {
-		return top_.load() == nullptr;
+		return count_.load() == 0;
 	}
 };
 
@@ -81,6 +153,7 @@ int main() {
 	for (int i = 0; i < THREAD_COUNT * ADD_COUNT + 1; i++) {
 		v[i] = i;
 	}
+	v[THREAD_COUNT * ADD_COUNT] = 0;
 
 	QueryPerformanceCounter(&start);
 	std::thread threads[THREAD_COUNT];
@@ -124,6 +197,11 @@ int main() {
 		v[d] = 0;
 		i++;
 	}
+
+	for (auto d : v) {
+		_ASSERT(d == 0);
+	}
+
 
 	return 0;
 }
